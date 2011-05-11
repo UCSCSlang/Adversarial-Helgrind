@@ -16,6 +16,7 @@ noinst_HEADERS = \
 	hg_errors.h \
 	hg_lock_n_thread.h \
 	hg_wordset.h \
+	hg_adversarial.h\
 	libhb.h
 
 #----------------------------------------------------------------------------
@@ -33,6 +34,7 @@ HELGRIND_SOURCES_COMMON = \
 	hg_lock_n_thread.c \
 	hg_main.c \
 	hg_wordset.c \
+	hg_adversarial.c \
 	libhb_core.c
 
 helgrind_@VGCONF_ARCH_PRI@_@VGCONF_OS@_SOURCES      = \
