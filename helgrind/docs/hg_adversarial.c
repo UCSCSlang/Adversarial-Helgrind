@@ -47,7 +47,7 @@ int adv_read32(Thread *thread, Addr addr)
   int i, val;
   for (i = 0; i < VG_(sizeXA)(wb); i++) {
     AddrVal *av = (AddrVal *)VG_(indexXA)(wb, i);
-    val = *(av->addr);
+    //val = *(av->addr);
   }
   return val;
 }

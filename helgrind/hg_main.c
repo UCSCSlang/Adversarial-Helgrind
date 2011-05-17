@@ -36,6 +36,7 @@
    without prior written permission.
 */
 
+#include "libvex_basictypes.h"
 #include "pub_tool_basics.h"
 #include "pub_tool_libcassert.h"
 #include "pub_tool_libcbase.h"
@@ -1845,6 +1846,67 @@ void evh__die_mem_heap ( Addr a, SizeT len ) {
       all__sanity_check("evh__pre_mem_read-post");
 }
 
+/* Adversarial memory */
+inline XArray *getOrCreateWB(Thread *t);
+void adv_read32(Thread *t, Addr a);
+void adv_write32(Thread *t, Addr a, UInt v);
+
+VgHashTable write_buffers; // Write Buffers, by thread
+
+typedef struct _AddrVal {
+  Addr addr;
+  int val;
+} AddrVal;
+
+typedef struct _AdvWBNode {
+  void *next;
+  Thread *thread;
+  XArray *wb;
+} AdvWBNode;
+
+inline XArray *getOrCreateWB(Thread *t) {
+	AdvWBNode *node = VG_(HT_lookup)(write_buffers, (UInt)t);
+	XArray *wb;
+	if (node != NULL) {
+		wb = node->wb;
+	} else {
+		wb = VG_(newXA)(HG_(zalloc), "thr", HG_(free), sizeof(AddrVal));
+		node = HG_(zalloc)("thr_node", sizeof(AdvWBNode));
+		node->thread = t;
+		node->wb = wb;
+		VG_(HT_add_node)(write_buffers, node);
+	}
+	return wb;
+}
+
+void adv_read32(Thread *t, Addr a) {
+	XArray *wb = getOrCreateWB(t);
+	int i, val = 0, found = 0;
+	for (i = 0; i < VG_(sizeXA)(wb) && !found; i++) {
+		AddrVal *av = (AddrVal *) VG_(indexXA)(wb, i);
+		if (av->addr == a) {
+			val = *(UInt*)(av->addr);
+			found = 1;
+		}
+	}
+	if (!found) {
+		val = *(UInt*)a;
+	} else {
+		*(UInt*)a = val;
+	}
+	VG_(printf)("read val %x at %x [%s]\n", val, (UInt)a, found ? "s" : "f");
+	return (UInt)val;
+}
+
+void adv_write32(Thread *t, Addr a, UInt v) {
+	XArray *wb = getOrCreateWB(t);
+	AddrVal av;
+	av.addr = a;
+	av.val  = v;
+	VG_(printf)("write val %x at %x\n", v, (UInt)a);
+	VG_(addToXA)(wb, &av);
+}
+
 /* --- Event handlers called from generated code --- */
 
 static VG_REGPARM(1)
@@ -1865,6 +1927,7 @@ static VG_REGPARM(1)
 void evh__mem_help_cread_4(Addr a) {
    Thread*  thr = get_current_Thread_in_C_C();
    Thr*     hbthr = thr->hbthr;
+   adv_read32(thr, a);
    LIBHB_CREAD_4(hbthr, a);
 }
 
@@ -1897,9 +1960,10 @@ void evh__mem_help_cwrite_2(Addr a) {
 }
 
 static VG_REGPARM(1)
-void evh__mem_help_cwrite_4(Addr a) {
+void evh__mem_help_cwrite_4(Addr a, UInt val) {
    Thread*  thr = get_current_Thread_in_C_C();
    Thr*     hbthr = thr->hbthr;
+   adv_write32(thr, a, val);
    LIBHB_CWRITE_4(hbthr, a);
 }
 
@@ -3990,7 +4054,9 @@ static void instrument_mem_access ( IRSB*   bbOut,
                                     IRExpr* addr,
                                     Int     szB,
                                     Bool    isStore,
-                                    Int     hWordTy_szB )
+                                    Int     hWordTy_szB,
+                                    IRExpr* val
+                                    )
 {
    IRType   tyAddr   = Ity_INVALID;
    HChar*   hName    = NULL;
@@ -4022,7 +4088,7 @@ static void instrument_mem_access ( IRSB*   bbOut,
          case 4:
             hName = "evh__mem_help_cwrite_4";
             hAddr = &evh__mem_help_cwrite_4;
-            argv = mkIRExprVec_1( addr );
+            argv = mkIRExprVec_2( addr, val );
             break;
          case 8:
             hName = "evh__mem_help_cwrite_8";
@@ -4215,7 +4281,8 @@ IRSB* hg_instrument ( VgCallbackClosure* closure,
                   (isDCAS ? 2 : 1)
                      * sizeofIRType(typeOfIRExpr(bbIn->tyenv, cas->dataLo)),
                   False/*!isStore*/,
-                  sizeofIRType(hWordTy)
+                  sizeofIRType(hWordTy),
+                  NULL
                );
             }
             break;
@@ -4235,7 +4302,8 @@ IRSB* hg_instrument ( VgCallbackClosure* closure,
                      st->Ist.LLSC.addr,
                      sizeofIRType(dataTy),
                      False/*!isStore*/,
-                     sizeofIRType(hWordTy)
+                     sizeofIRType(hWordTy),
+                     NULL
                   );
                }
             } else {
@@ -4254,7 +4322,8 @@ IRSB* hg_instrument ( VgCallbackClosure* closure,
                   st->Ist.Store.addr, 
                   sizeofIRType(typeOfIRExpr(bbIn->tyenv, st->Ist.Store.data)),
                   True/*isStore*/,
-                  sizeofIRType(hWordTy)
+                  sizeofIRType(hWordTy),
+                  st->Ist.Store.data
                );
             }
             break;
@@ -4270,7 +4339,8 @@ IRSB* hg_instrument ( VgCallbackClosure* closure,
                      data->Iex.Load.addr,
                      sizeofIRType(data->Iex.Load.ty),
                      False/*!isStore*/,
-                     sizeofIRType(hWordTy)
+                     sizeofIRType(hWordTy),
+                     NULL
                   );
                }
             }
@@ -4290,7 +4360,7 @@ IRSB* hg_instrument ( VgCallbackClosure* closure,
                   if (!inLDSO) {
                      instrument_mem_access( 
                         bbOut, d->mAddr, dataSize, False/*!isStore*/,
-                        sizeofIRType(hWordTy)
+                        sizeofIRType(hWordTy), NULL
                      );
                   }
                }
@@ -4298,7 +4368,7 @@ IRSB* hg_instrument ( VgCallbackClosure* closure,
                   if (!inLDSO) {
                      instrument_mem_access( 
                         bbOut, d->mAddr, dataSize, True/*isStore*/,
-                        sizeofIRType(hWordTy)
+                        sizeofIRType(hWordTy), NULL
                      );
                   }
                }
@@ -4734,6 +4804,7 @@ static void hg_print_debug_usage ( void )
 
 static void hg_post_clo_init ( void )
 {
+	write_buffers = VG_(HT_construct)("hg_writebuffer_map");
 }
 
 static void hg_fini ( Int exitcode )

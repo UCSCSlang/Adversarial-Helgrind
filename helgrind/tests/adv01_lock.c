@@ -12,7 +12,7 @@ void *f1(void *ptr) {
 #ifdef LOCK
   pthread_mutex_lock(&mutex);
 #endif
-  for (i = 0; i < 10000000; i++) {
+  for (i = 0; i < 10; i++) {
     a++;
   }
 #ifdef LOCK
@@ -26,7 +26,7 @@ void *f2(void *ptr) {
 #ifdef LOCK
   pthread_mutex_lock(&mutex);
 #endif
-  for (i = 0; i < 10000000; i++) {
+  for (i = 0; i < 10; i++) {
     a--;
   }
 #ifdef LOCK
@@ -39,11 +39,15 @@ int main(int argc, char **argv) {
   pthread_t tid1, tid2;
   void *sptr1, *sptr2;
   a = 0;
+  printf("mutex init\n");
   pthread_mutex_init(&mutex, NULL);
+  printf("thread_create\n");
   pthread_create(&tid1, NULL, &f1, NULL);
   pthread_create(&tid2, NULL, &f2, NULL);
+  printf("thread_join\n");
   pthread_join(tid1, &sptr1);
   pthread_join(tid2, &sptr2);
+  printf("mutex destroy\n");
   pthread_mutex_destroy(&mutex);
   printf("%i\n", a);
   return 0;
