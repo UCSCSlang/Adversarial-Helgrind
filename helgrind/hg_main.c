@@ -1847,41 +1847,66 @@ void evh__die_mem_heap ( Addr a, SizeT len ) {
 }
 
 /* Adversarial memory */
-inline XArray *getOrCreateWB(Thread *t);
+
+#define ADV_DEBUG 1
+
+inline XArray *get_or_create_wb(Thread *t);
 void adv_read32(Thread *t, Addr a);
 void adv_write32(Thread *t, Addr a, UInt v);
+void adv_fence(Thread *t);
 
 VgHashTable write_buffers; // Write Buffers, by thread
 
+/*
+ * Stores pairs <address, value> in the writebuffer
+ */
 typedef struct _AddrVal {
   Addr addr;
-  int val;
+  UInt val;
 } AddrVal;
 
+/*
+ * Nodes for the write_buffers hastable
+ */
 typedef struct _AdvWBNode {
   void *next;
-  Thread *thread;
-  XArray *wb;
+  UInt tid; // Thread ID
+  XArray *wb; // Relative WriteBuffer
 } AdvWBNode;
 
-inline XArray *getOrCreateWB(Thread *t) {
-	AdvWBNode *node = VG_(HT_lookup)(write_buffers, (UInt)t);
+/*
+ * Gets the writebuffer for thread t, if not found in the hastable it creates
+ * a new one.
+ */
+inline XArray *get_or_create_wb(Thread *t) {
+	AdvWBNode *node = VG_(HT_lookup)(write_buffers, t->coretid);
 	XArray *wb;
 	if (node != NULL) {
 		wb = node->wb;
 	} else {
 		wb = VG_(newXA)(HG_(zalloc), "thr", HG_(free), sizeof(AddrVal));
 		node = HG_(zalloc)("thr_node", sizeof(AdvWBNode));
-		node->thread = t;
+		node->tid = t->coretid;
 		node->wb = wb;
 		VG_(HT_add_node)(write_buffers, node);
 	}
 	return wb;
 }
 
+/**
+ * Handles the event of a read to a memory location
+ *
+ * Use one of the most outdated values found in a writebuffer != wb[t] if there's any
+ * and write it to the specified memory location (to be used from the subsequent memory access)
+ *
+ * @param t operating thread
+ * @param a the address at which the read is attempted
+ *
+ */
 void adv_read32(Thread *t, Addr a) {
-	XArray *wb = getOrCreateWB(t);
-	int i, val = 0, found = 0;
+	// TODO: track just the needed variables from the information received by helgrind's analysis
+	XArray *wb = get_or_create_wb(t);
+	UInt i, val = 0, found = 0;
 	for (i = 0; i < VG_(sizeXA)(wb) && !found; i++) {
 		AddrVal *av = (AddrVal *) VG_(indexXA)(wb, i);
 		if (av->addr == a) {
@@ -1894,20 +1919,61 @@ void adv_read32(Thread *t, Addr a) {
 	} else {
 		*(UInt*)a = val;
 	}
-	VG_(printf)("read val %x at %x [%s]\n", val, (UInt)a, found ? "s" : "f");
-	return (UInt)val;
+	if (ADV_DEBUG)
+		VG_(printf)("read val %x at %x [%s] thread: %d\n", val, (UInt)a, found ? "s" : "f", t->coretid);
 }
 
+/**
+ * Records a write in the writebuffer
+ *
+ * @param t operating thread
+ * @param a the memory location (address) at which the write is done
+ * @param v the written value
+ */
 void adv_write32(Thread *t, Addr a, UInt v) {
-	XArray *wb = getOrCreateWB(t);
+	// TODO: track just the needed variables from the information received by helgrind's analysis
+	XArray *wb = get_or_create_wb(t);
 	AddrVal av;
 	av.addr = a;
 	av.val  = v;
-	VG_(printf)("write val %x at %x\n", v, (UInt)a);
-	VG_(addToXA)(wb, &av);
+	if (ADV_DEBUG)
+		VG_(printf)("write val %x at %x thread: %d\n", v, (UInt)a, t->coretid);
+	UInt idx = VG_(addToXA)(wb, &av);
+	VG_(printf)("index %d\n", idx);
+}
+
+/**
+ *  Flushes the writebuffer for the current thread
+ *
+ *  @param t operating thread
+ */
+void adv_fence(Thread *t) {
+	VG_(HT_ResetIter)(write_buffers);
+	AdvWBNode *node;
+	while ((node = VG_(HT_Next)(write_buffers)) != NULL) {
+		XArray *wb = node->wb;
+		Int i;
+		for (i = 0; i < VG_(sizeXA)(wb); i++) {
+			AddrVal *av = (AddrVal *)VG_(indexXA)(wb, i);
+			if (ADV_DEBUG)
+				VG_(printf)("setting loc %x to val %x thread: %d\n",
+						(UInt)av->addr, av->val, node->tid);
+			*((UInt *)av->addr) = av->val;
+		}
+		VG_(dropTailXA)(wb, VG_(sizeXA)(wb));
+		tl_assert(VG_(sizeXA)(wb) == 0);
+	}
+	if (ADV_DEBUG)
+		VG_(printf)("memory fence thread: %d\n", t->coretid);
 }
 
 /* --- Event handlers called from generated code --- */
+
+static VG_REGPARM(0)
+void evh__mem_fence() {
+	Thread*  thr = get_current_Thread_in_C_C();
+	adv_fence(thr);
+}
 
 static VG_REGPARM(1)
 void evh__mem_help_cread_1(Addr a) {
@@ -4183,12 +4249,12 @@ IRSB* hg_instrument ( VgCallbackClosure* closure,
                       VexGuestExtents* vge,
                       IRType gWordTy, IRType hWordTy )
 {
-   Int     i;
-   IRSB*   bbOut;
-   Addr64  cia; /* address of current insn */
-   IRStmt* st;
-   Bool    inLDSO = False;
-   Addr64  inLDSOmask4K = 1; /* mismatches on first check */
+   Int      i;
+   IRSB*    bbOut;
+   Addr64   cia; /* address of current insn */
+   IRStmt*  st;
+   Bool     inLDSO = False;
+   Addr64   inLDSOmask4K = 1; /* mismatches on first check */
 
    if (gWordTy != hWordTy) {
       /* We don't currently support this case. */
@@ -4254,8 +4320,11 @@ IRSB* hg_instrument ( VgCallbackClosure* closure,
 
          case Ist_MBE:
             switch (st->Ist.MBE.event) {
-               case Imbe_Fence:
-                  break; /* not interesting */
+               case Imbe_Fence: {
+            	  IRDirty *d = unsafeIRDirty_0_N(0, "evh__mem_fence", &evh__mem_fence, mkIRExprVec_0());
+            	  addStmtToIRSB(bbOut, IRStmt_Dirty(d));
+                  break;
+               }
                default:
                   goto unhandled;
             }
