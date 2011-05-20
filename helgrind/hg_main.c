@@ -1850,47 +1850,77 @@ void evh__die_mem_heap ( Addr a, SizeT len ) {
 
 #define ADV_DEBUG 1
 
-inline XArray *get_or_create_wb(Thread *t);
+XArray *get_or_create_wb(Thread *t, Addr a);
+XArray *get_random_wb(Thread *t, Addr a);
 void adv_read32(Thread *t, Addr a);
 void adv_write32(Thread *t, Addr a, UInt v);
 void adv_fence(Thread *t);
 
 VgHashTable write_buffers; // Write Buffers, by thread
 
-/*
- * Stores pairs <address, value> in the writebuffer
- */
-typedef struct _AddrVal {
-  Addr addr;
-  UInt val;
-} AddrVal;
-
-/*
- * Nodes for the write_buffers hastable
- */
-typedef struct _AdvWBNode {
+typedef struct _AddrWBNode {
   void *next;
+  Addr addr;
+  XArray *wb;
+} AddrWBNode;
+
+typedef struct _AdvWB {
   UInt tid; // Thread ID
   XArray *wb; // Relative WriteBuffer
-} AdvWBNode;
+} AdvWB;
 
 /*
  * Gets the writebuffer for thread t, if not found in the hastable it creates
  * a new one.
  */
-inline XArray *get_or_create_wb(Thread *t) {
-	AdvWBNode *node = VG_(HT_lookup)(write_buffers, t->coretid);
-	XArray *wb;
+XArray *get_or_create_wb(Thread *t, Addr a) {
+	AddrWBNode *node = VG_(HT_lookup)(write_buffers, (UInt)a); // FIXME: doesn't work in 64 bit environments!
 	if (node != NULL) {
-		wb = node->wb;
+		Int i;
+		XArray *wb = node->wb;
+		for (i = 0; i < VG_(sizeXA)(wb); i++) {
+			AdvWB *awb = VG_(indexXA)(wb, i);
+			if (awb->tid == t->coretid)
+				return awb->wb;
+		}
+		// Thread not found, add it
+		AdvWB awb;
+		awb.tid = t->coretid;
+		awb.wb = VG_(newXA)(HG_(zalloc), "addr_thr_wb", HG_(free), sizeof(UInt));
+		VG_(addToXA)(wb, &awb);
+		return awb.wb;
 	} else {
-		wb = VG_(newXA)(HG_(zalloc), "thr", HG_(free), sizeof(AddrVal));
-		node = HG_(zalloc)("thr_node", sizeof(AdvWBNode));
-		node->tid = t->coretid;
+		// Address writebuffer
+		XArray *wb = VG_(newXA)(HG_(zalloc), "addr_wb", HG_(free), sizeof(AdvWB));
+		node = HG_(zalloc)("addr_wb_node", sizeof(AddrWBNode));
+		node->addr = a;
 		node->wb = wb;
+		// Thread specific writebuffer
+		AdvWB awb;
+		awb.tid = t->coretid;
+		awb.wb = VG_(newXA)(HG_(zalloc), "addr_thr_wb", HG_(free), sizeof(UInt));
+
+		VG_(addToXA)(wb, &awb);
 		VG_(HT_add_node)(write_buffers, node);
+		return awb.wb;
 	}
-	return wb;
+}
+
+XArray *get_random_wb(Thread *t, Addr a) {
+	AddrWBNode *node = VG_(HT_lookup)(write_buffers, (UInt)a); // FIXME: doesn't work in 64 bit environments!
+	tl_assert(node != NULL);
+	XArray *wb = node->wb;
+	if (VG_(sizeXA)(wb) == 1) {
+		AdvWB *awb = ((AdvWB *)VG_(indexXA)(wb, 0));
+		if (awb->tid == t->coretid)
+			return NULL;
+		else
+			return awb->wb;
+	}
+	AdvWB *awb = ((AdvWB*)VG_(indexXA)(wb, VG_(random)(NULL) % VG_(sizeXA)(wb)));
+	while (awb->tid == t->coretid)
+		awb = ((AdvWB*)VG_(indexXA)(wb, VG_(random)(NULL) % VG_(sizeXA)(wb)));
+	return awb->wb;
 }
 
 /**
@@ -1904,23 +1934,23 @@ inline XArray *get_or_create_wb(Thread *t) {
  *
  */
 void adv_read32(Thread *t, Addr a) {
-	// TODO: track just the needed variables from the information received by helgrind's analysis
-	XArray *wb = get_or_create_wb(t);
-	UInt i, val = 0, found = 0;
-	for (i = 0; i < VG_(sizeXA)(wb) && !found; i++) {
-		AddrVal *av = (AddrVal *) VG_(indexXA)(wb, i);
-		if (av->addr == a) {
-			val = *(UInt*)(av->addr);
-			found = 1;
-		}
-	}
-	if (!found) {
+	ExeContext *resEC;
+	Thr *resThr;
+	SizeT resSzB;
+	Bool resIsW;
+	Bool race = libhb_event_map_lookup(&resEC, &resThr, &resSzB, &resIsW, t->hbthr, a, 4, False);
+	if (!race)
+		return; // No instrumentation for non racy accesses
+
+	XArray *wb = get_or_create_wb(t, a);
+	UInt val, size = VG_(sizeXA)(wb);
+	if (size > 0)
+		*(UInt*)a = val = *((UInt*)VG_(indexXA)(wb, VG_(random)(NULL) % size));
+#if ADV_DEBUG
+	else
 		val = *(UInt*)a;
-	} else {
-		*(UInt*)a = val;
-	}
-	if (ADV_DEBUG)
-		VG_(printf)("read val %x at %x [%s] thread: %d\n", val, (UInt)a, found ? "s" : "f", t->coretid);
+	VG_(printf)("read val %x at %x [%s] thread: %d\n", val, (UInt)a, size>0 ? "s" : "f", t->coretid);
+#endif
 }
 
 /**
@@ -1931,15 +1961,20 @@ void adv_read32(Thread *t, Addr a) {
  * @param v the written value
  */
 void adv_write32(Thread *t, Addr a, UInt v) {
-	// TODO: track just the needed variables from the information received by helgrind's analysis
-	XArray *wb = get_or_create_wb(t);
-	AddrVal av;
-	av.addr = a;
-	av.val  = v;
-	if (ADV_DEBUG)
-		VG_(printf)("write val %x at %x thread: %d\n", v, (UInt)a, t->coretid);
-	UInt idx = VG_(addToXA)(wb, &av);
-	VG_(printf)("index %d\n", idx);
+	ExeContext *resEC;
+	Thr *resThr;
+	SizeT resSzB;
+	Bool resIsW;
+	Bool race = libhb_event_map_lookup(&resEC, &resThr, &resSzB, &resIsW, t->hbthr, a, 4, True);
+	if (!race)
+		return; // No instrumentation for non racy accesses
+
+	XArray *wb = get_or_create_wb(t, a);
+#if ADV_DEBUG
+	VG_(printf)("write val %x at %x thread: %d ", v, (UInt)a, t->coretid);
+#endif
+	UInt idx = VG_(addToXA)(wb, &v);
+	VG_(printf)("index: %d\n", idx);
 }
 
 /**
@@ -1949,22 +1984,18 @@ void adv_write32(Thread *t, Addr a, UInt v) {
  */
 void adv_fence(Thread *t) {
 	VG_(HT_ResetIter)(write_buffers);
-	AdvWBNode *node;
+	AddrWBNode *node;
 	while ((node = VG_(HT_Next)(write_buffers)) != NULL) {
-		XArray *wb = node->wb;
-		Int i;
-		for (i = 0; i < VG_(sizeXA)(wb); i++) {
-			AddrVal *av = (AddrVal *)VG_(indexXA)(wb, i);
-			if (ADV_DEBUG)
-				VG_(printf)("setting loc %x to val %x thread: %d\n",
-						(UInt)av->addr, av->val, node->tid);
-			*((UInt *)av->addr) = av->val;
+		Addr a = node->addr;
+		XArray *awb = node->wb;
+		Int i, j;
+		for (i = 0; i < VG_(sizeXA)(awb); i++) {
+			XArray *wb = ((AdvWB*)VG_(indexXA)(awb, i))->wb;
+			for (j = 0; j < VG_(sizeXA)(wb); j++)
+				*((UInt *)a) = *((UInt*)VG_(indexXA)(wb, j));
+			VG_(dropTailXA)(wb, VG_(sizeXA)(wb));
 		}
-		VG_(dropTailXA)(wb, VG_(sizeXA)(wb));
-		tl_assert(VG_(sizeXA)(wb) == 0);
 	}
-	if (ADV_DEBUG)
-		VG_(printf)("memory fence thread: %d\n", t->coretid);
 }
 
 /* --- Event handlers called from generated code --- */
