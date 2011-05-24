@@ -44,6 +44,7 @@
 #include "hg_basics.h"
 #include "hg_wordset.h"
 #include "hg_lock_n_thread.h"
+#include "hg_adv.h"
 #include "libhb.h"
 #include "hg_errors.h"            /* self */
 
@@ -414,6 +415,7 @@ void HG_(record_error_Race) ( Thread* thr,
 
    VG_(maybe_record_error)( thr->coretid,
                             XE_Race, data_addr, NULL, &xe );
+   adv_track_address(data_addr);
 }
 
 void HG_(record_error_UnlockUnlocked) ( Thread* thr, Lock* lk )

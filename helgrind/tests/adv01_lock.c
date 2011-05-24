@@ -4,6 +4,8 @@
 #define LOCK
 #undef LOCK
 
+const int n = 10000000;
+
 int a;
 pthread_mutex_t mutex;
 
@@ -12,7 +14,7 @@ void *f1(void *ptr) {
 #ifdef LOCK
   pthread_mutex_lock(&mutex);
 #endif
-  for (i = 0; i < 10; i++) {
+  for (i = 0; i < n; i++) {
     a++;
   }
 #ifdef LOCK
@@ -26,7 +28,7 @@ void *f2(void *ptr) {
 #ifdef LOCK
   pthread_mutex_lock(&mutex);
 #endif
-  for (i = 0; i < 10; i++) {
+  for (i = 0; i < n; i++) {
     a--;
   }
 #ifdef LOCK

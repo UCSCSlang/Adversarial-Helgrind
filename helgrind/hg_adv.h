@@ -32,12 +32,8 @@
 
 /* Adversarial memory */
 
-#define ADV_DEBUG 1
-
-XArray *get_or_create_wb(Thread *t, Addr a);
-XArray *get_random_wb(Thread *t, Addr a);
-
-void adv_init();
+void adv_track_address(Addr a);
+void adv_init(void);
 void adv_read32(Thread *t, Addr a);
 void adv_write32(Thread *t, Addr a, UInt v);
 void adv_fence(Thread *t);

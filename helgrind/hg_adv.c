@@ -1,6 +1,6 @@
 #include "hg_adv.h"
 
-
+#define ADV_DEBUG 0
 
 VgHashTable write_buffers; // Write Buffers, by thread
 
@@ -15,63 +15,26 @@ typedef struct _AdvWB {
   XArray *wb; // Relative WriteBuffer
 } AdvWB;
 
-/*
- * Gets the writebuffer for thread t, if not found in the hastable it creates
- * a new one.
- */
-XArray *get_or_create_wb(Thread *t, Addr a) {
-	AddrWBNode *node = VG_(HT_lookup)(write_buffers, (UInt)a); // FIXME: doesn't work in 64 bit environments!
-	if (node != NULL) {
-		Int i;
-		XArray *wb = node->wb;
-		for (i = 0; i < VG_(sizeXA)(wb); i++) {
-			AdvWB *awb = VG_(indexXA)(wb, i);
-			if (awb->tid == t->coretid)
-				return awb->wb;
-		}
-		// Thread not found, add it
-		AdvWB awb;
-		awb.tid = t->coretid;
-		awb.wb = VG_(newXA)(HG_(zalloc), "addr_thr_wb", HG_(free), sizeof(UInt));
-		VG_(addToXA)(wb, &awb);
-		return awb.wb;
-	} else {
-		// Address writebuffer
-		XArray *wb = VG_(newXA)(HG_(zalloc), "addr_wb", HG_(free), sizeof(AdvWB));
-		node = HG_(zalloc)("addr_wb_node", sizeof(AddrWBNode));
-		node->addr = a;
-		node->wb = wb;
-		// Thread specific writebuffer
-		AdvWB awb;
-		awb.tid = t->coretid;
-		awb.wb = VG_(newXA)(HG_(zalloc), "addr_thr_wb", HG_(free), sizeof(UInt));
+XArray *get_or_create_wb(Thread *t, Addr a);
+XArray *get_random_wb(Thread *t, Addr a);
 
-		VG_(addToXA)(wb, &awb);
-		VG_(HT_add_node)(write_buffers, node);
-		return awb.wb;
-	}
-}
-
-XArray *get_random_wb(Thread *t, Addr a) {
-	AddrWBNode *node = VG_(HT_lookup)(write_buffers, (UInt)a); // FIXME: doesn't work in 64 bit environments!
-	tl_assert(node != NULL);
-	XArray *wb = node->wb;
-	if (VG_(sizeXA)(wb) == 1) {
-		AdvWB *awb = ((AdvWB *)VG_(indexXA)(wb, 0));
-		if (awb->tid == t->coretid)
-			return NULL;
-		else
-			return awb->wb;
-	}
-	AdvWB *awb = ((AdvWB*)VG_(indexXA)(wb, VG_(random)(NULL) % VG_(sizeXA)(wb)));
-	while (awb->tid == t->coretid)
-		awb = ((AdvWB*)VG_(indexXA)(wb, VG_(random)(NULL) % VG_(sizeXA)(wb)));
-	return awb->wb;
-}
-
-
-void adv_init() {
+void adv_init(void) {
 	write_buffers = VG_(HT_construct)("hg_writebuffer_map");
+}
+
+void adv_track_address(Addr a) {
+	AddrWBNode *node = VG_(HT_lookup)(write_buffers, (UInt) a); // FIXME: doesn't work in 64 bit environments!
+	if (node != NULL)
+		return; // Address a is already tracked
+	// Address writebuffer
+	XArray *wb = VG_(newXA)(HG_(zalloc), "addr_wb", HG_(free), sizeof(AdvWB));
+	node = HG_(zalloc)("addr_wb_node", sizeof(AddrWBNode));
+	node->addr = a;
+	node->wb = wb;
+	VG_(HT_add_node)(write_buffers, node);
+#if ADV_DEBUG
+	VG_(printf)("tracking address 0x%x\n", (UInt)a);
+#endif
 }
 
 /**
@@ -85,22 +48,20 @@ void adv_init() {
  *
  */
 void adv_read32(Thread *t, Addr a) {
-	ExeContext *resEC;
-	Thr *resThr;
-	SizeT resSzB;
-	Bool resIsW;
-	Bool race = libhb_event_map_lookup(&resEC, &resThr, &resSzB, &resIsW, t->hbthr, a, 4, False);
-	if (!race)
-		return; // No instrumentation for non racy accesses
+	XArray *wb = get_random_wb(t, a);
+	if (wb == NULL)
+		return;
 
-	XArray *wb = get_or_create_wb(t, a);
 	UInt val, size = VG_(sizeXA)(wb);
+	UInt index = VG_(random)(NULL) % size;
 	if (size > 0)
-		*(UInt*)a = val = *((UInt*)VG_(indexXA)(wb, VG_(random)(NULL) % size));
+		*(UInt*)a = val = *((UInt*)VG_(indexXA)(wb, index));
 #if ADV_DEBUG
 	else
 		val = *(UInt*)a;
-	VG_(printf)("read val %x at %x [%s] thread: %d\n", val, (UInt)a, size>0 ? "s" : "f", t->coretid);
+	VG_(printf)("read val %x at 0x%x [%s] thread: %d\n", val, (UInt)a, size>0 ? "s" : "f", t->coretid);
+	if (*(UInt*)a != val)
+		VG_(printf)("actual val %x\n", (UInt)*(UInt*)a);
 #endif
 }
 
@@ -112,20 +73,13 @@ void adv_read32(Thread *t, Addr a) {
  * @param v the written value
  */
 void adv_write32(Thread *t, Addr a, UInt v) {
-	ExeContext *resEC;
-	Thr *resThr;
-	SizeT resSzB;
-	Bool resIsW;
-	Bool race = libhb_event_map_lookup(&resEC, &resThr, &resSzB, &resIsW, t->hbthr, a, 4, True);
-	if (!race)
-		return; // No instrumentation for non racy accesses
-
 	XArray *wb = get_or_create_wb(t, a);
-#if ADV_DEBUG
-	VG_(printf)("write val %x at %x thread: %d ", v, (UInt)a, t->coretid);
-#endif
+	if (wb == NULL)
+		return;
 	UInt idx = VG_(addToXA)(wb, &v);
-	VG_(printf)("index: %d\n", idx);
+#if ADV_DEBUG
+	VG_(printf)("write val %x at 0x%x thread: %d index: %d\n", v, (UInt)a, t->coretid, idx);
+#endif
 }
 
 /**
@@ -147,4 +101,51 @@ void adv_fence(Thread *t) {
 			VG_(dropTailXA)(wb, VG_(sizeXA)(wb));
 		}
 	}
+#if ADV_DEBUG
+	VG_(printf)("memory fence\n");
+#endif
+}
+
+
+/*
+ * Gets the writebuffer for thread t and address a if a is tracked,
+ * if not found it creates a new one. Returns NULL if a is not tracked.
+ */
+XArray *get_or_create_wb(Thread *t, Addr a) {
+	AddrWBNode *node = VG_(HT_lookup)(write_buffers, (UInt)a); // FIXME: doesn't work in 64 bit environments!
+	if (node == NULL)
+		return NULL;
+	Int i;
+	XArray *wb = node->wb;
+	for (i = 0; i < VG_(sizeXA)(wb); i++) {
+		AdvWB *awb = VG_(indexXA)(wb, i);
+		if (awb->tid == t->coretid)
+			return awb->wb;
+	}
+	// Thread not found, add it
+	AdvWB awb;
+	awb.tid = t->coretid;
+	awb.wb = VG_(newXA)(HG_(zalloc), "addr_thr_wb", HG_(free), sizeof(UInt));
+	VG_(addToXA)(wb, &awb);
+	return awb.wb;
+}
+
+XArray *get_random_wb(Thread *t, Addr a) {
+	AddrWBNode *node = VG_(HT_lookup)(write_buffers, (UInt)a); // FIXME: doesn't work in 64 bit environments!
+	if (node == NULL)
+		return NULL;
+	XArray *wb = node->wb;
+	Int size = VG_(sizeXA)(wb);
+	if (size == 1) {
+		AdvWB *awb = ((AdvWB *)VG_(indexXA)(wb, 0));
+		if (awb->tid == t->coretid)
+			return NULL;
+		else
+			return awb->wb;
+	} else if (size > 1) {
+		AdvWB *awb = ((AdvWB*)VG_(indexXA)(wb, VG_(random)(NULL) % VG_(sizeXA)(wb)));
+		while (awb->tid == t->coretid)
+			awb = ((AdvWB*)VG_(indexXA)(wb, VG_(random)(NULL) % VG_(sizeXA)(wb)));
+		return awb->wb;
+	} else return NULL;
 }

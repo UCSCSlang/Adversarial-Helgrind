@@ -1586,6 +1586,7 @@ void evh__pre_thread_ll_create ( ThreadId parent, ThreadId child )
       VG_(printf)("evh__pre_thread_ll_create(p=%d, c=%d)\n",
                   (Int)parent, (Int)child );
 
+   adv_fence(NULL);
    if (parent != VG_INVALID_THREADID) {
       Thread* thr_p;
       Thread* thr_c;
@@ -1645,6 +1646,7 @@ void evh__pre_thread_ll_create ( ThreadId parent, ThreadId child )
 static
 void evh__pre_thread_ll_exit ( ThreadId quit_tid )
 {
+   adv_fence(NULL);
    Int     nHeld;
    Thread* thr_q;
    if (SHOW_EVENTS >= 1)
@@ -1850,7 +1852,7 @@ void evh__die_mem_heap ( Addr a, SizeT len ) {
 /* --- Event handlers called from generated code --- */
 
 static VG_REGPARM(0)
-void evh__mem_fence() {
+void evh__mem_fence(void) {
 	Thread*  thr = get_current_Thread_in_C_C();
 	adv_fence(thr);
 }
