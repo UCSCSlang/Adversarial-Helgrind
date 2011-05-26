@@ -1,0 +1,2 @@
+vgopts: -q
+prog: adv02_heap

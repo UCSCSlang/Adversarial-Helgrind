@@ -4,6 +4,8 @@ include $(top_srcdir)/Makefile.tool-tests.am
 dist_noinst_SCRIPTS = filter_stderr
 
 EXTRA_DIST = \
+	adv01_lock.vgtest adv01_lock.stdout.exp adv01_lock.stderr.exp \
+	adv02_heap.vgtest adv02_heap.stdout.exp adv02_heap.stderr.exp \
 	annotate_hbefore.vgtest annotate_hbefore.stdout.exp \
 		annotate_hbefore.stderr.exp \
 	annotate_rwlock.vgtest annotate_rwlock.stdout.exp \
@@ -76,6 +78,7 @@ EXTRA_DIST = \
 # XXX: tc18_semabuse uses operations that are unsupported on Darwin.  It
 # should be conditionally compiled like tc20_verifywrap is.
 check_PROGRAMS = \
+	adv01_lock \
 	annotate_hbefore \
 	hg01_all_ok \
 	hg02_deadlock \

@@ -55,7 +55,7 @@ void adv_read32(Thread *t, Addr a) {
 	UInt val, size = VG_(sizeXA)(wb);
 	UInt index = VG_(random)(NULL) % size;
 	if (size > 0)
-		*(UInt*)a = val = *((UInt*)VG_(indexXA)(wb, index));
+		val = *((UInt*)VG_(indexXA)(wb, index));
 #if ADV_DEBUG
 	else
 		val = *(UInt*)a;
