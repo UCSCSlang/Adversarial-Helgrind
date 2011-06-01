@@ -1,0 +1,46 @@
+Thread #x was created
+   ...
+   by 0x........: pthread_create@* (hg_intercepts.c:...)
+   by 0x........: main (adv01_lock.c:50)
+
+Thread #x was created
+   ...
+   by 0x........: pthread_create@* (hg_intercepts.c:...)
+   by 0x........: main (adv01_lock.c:49)
+
+Possible data race during read of size 4 at 0x........ by thread #x
+   at 0x........: f2 (adv01_lock.c:32)
+   by 0x........: mythread_wrapper (hg_intercepts.c:...)
+   ...
+ This conflicts with a previous write of size 4 by thread #x
+   at 0x........: f1 (adv01_lock.c:18)
+   by 0x........: mythread_wrapper (hg_intercepts.c:...)
+   ...
+
+Possible data race during write of size 4 at 0x........ by thread #x
+   at 0x........: f2 (adv01_lock.c:32)
+   by 0x........: mythread_wrapper (hg_intercepts.c:...)
+   ...
+ This conflicts with a previous write of size 4 by thread #x
+   at 0x........: f1 (adv01_lock.c:18)
+   by 0x........: mythread_wrapper (hg_intercepts.c:...)
+   ...
+
+Possible data race during read of size 4 at 0x........ by thread #x
+   at 0x........: f1 (adv01_lock.c:18)
+   by 0x........: mythread_wrapper (hg_intercepts.c:...)
+   ...
+ This conflicts with a previous write of size 4 by thread #x
+   at 0x........: f2 (adv01_lock.c:32)
+   by 0x........: mythread_wrapper (hg_intercepts.c:...)
+   ...
+
+Possible data race during write of size 4 at 0x........ by thread #x
+   at 0x........: f1 (adv01_lock.c:18)
+   by 0x........: mythread_wrapper (hg_intercepts.c:...)
+   ...
+ This conflicts with a previous write of size 4 by thread #x
+   at 0x........: f2 (adv01_lock.c:32)
+   by 0x........: mythread_wrapper (hg_intercepts.c:...)
+   ...
+

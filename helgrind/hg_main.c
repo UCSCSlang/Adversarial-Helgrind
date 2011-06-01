@@ -1586,7 +1586,7 @@ void evh__pre_thread_ll_create ( ThreadId parent, ThreadId child )
       VG_(printf)("evh__pre_thread_ll_create(p=%d, c=%d)\n",
                   (Int)parent, (Int)child );
 
-   adv_fence(NULL);
+   //adv_fence(NULL);
    if (parent != VG_INVALID_THREADID) {
       Thread* thr_p;
       Thread* thr_c;
@@ -1646,7 +1646,7 @@ void evh__pre_thread_ll_create ( ThreadId parent, ThreadId child )
 static
 void evh__pre_thread_ll_exit ( ThreadId quit_tid )
 {
-   adv_fence(NULL);
+   //adv_fence(NULL);
    Int     nHeld;
    Thread* thr_q;
    if (SHOW_EVENTS >= 1)
@@ -1875,7 +1875,7 @@ static VG_REGPARM(1)
 void evh__mem_help_cread_4(Addr a) {
    Thread*  thr = get_current_Thread_in_C_C();
    Thr*     hbthr = thr->hbthr;
-   adv_read32(thr, a);
+   adv_read_32(thr, a);
    LIBHB_CREAD_4(hbthr, a);
 }
 
@@ -1911,7 +1911,7 @@ static VG_REGPARM(1)
 void evh__mem_help_cwrite_4(Addr a, UInt val) {
    Thread*  thr = get_current_Thread_in_C_C();
    Thr*     hbthr = thr->hbthr;
-   adv_write32(thr, a, val);
+   adv_write_32(thr, a, val);
    LIBHB_CWRITE_4(hbthr, a);
 }
 

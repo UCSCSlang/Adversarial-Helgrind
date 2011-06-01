@@ -30,12 +30,27 @@
 
 #include "helgrind.h"
 
+#include <stdint.h>
+
 /* Adversarial memory */
 
-void adv_track_address(Addr a);
 void adv_init(void);
-void adv_read32(Thread *t, Addr a);
-void adv_write32(Thread *t, Addr a, UInt v);
+
+void adv_track_addr_8(Addr a);
+void adv_track_addr_16(Addr a);
+void adv_track_addr_32(Addr a);
+void adv_track_addr_64(Addr a);
+
+void adv_read_8(Thread *t, Addr a);
+void adv_read_16(Thread *t, Addr a);
+void adv_read_32(Thread *t, Addr a);
+void adv_read_64(Thread *t, Addr a);
+
+void adv_write_8(Thread *t, Addr a, uint8_t v);
+void adv_write_16(Thread *t, Addr a, uint16_t v);
+void adv_write_32(Thread *t, Addr a, uint32_t v);
+void adv_write_64(Thread *t, Addr a, uint64_t v);
+
 void adv_fence(Thread *t);
 
 #endif

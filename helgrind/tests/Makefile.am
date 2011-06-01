@@ -79,6 +79,7 @@ EXTRA_DIST = \
 # should be conditionally compiled like tc20_verifywrap is.
 check_PROGRAMS = \
 	adv01_lock \
+	adv02_heap \
 	annotate_hbefore \
 	hg01_all_ok \
 	hg02_deadlock \

@@ -415,7 +415,16 @@ void HG_(record_error_Race) ( Thread* thr,
 
    VG_(maybe_record_error)( thr->coretid,
                             XE_Race, data_addr, NULL, &xe );
-   adv_track_address(data_addr);
+   switch(szB) {
+   case 1:
+	   adv_track_addr_8(data_addr);
+   case 2:
+	   adv_track_addr_16(data_addr);
+   case 4:
+	   adv_track_addr_32(data_addr);
+   case 8:
+	   adv_track_addr_64(data_addr);
+   }
 }
 
 void HG_(record_error_UnlockUnlocked) ( Thread* thr, Lock* lk )
